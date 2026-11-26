@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vllm-literal-tokens"
+version = "0.1.0"
+description = "Keep literal special-token strings as ordinary text in vLLM Chat Completions (Qwen3+)"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [{ name = "Mingzhe Li" }]
+keywords = ["vllm", "qwen", "qwen3", "special-tokens", "tokenizer", "tool-calling", "reasoning"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "tokenizers>=0.20",
+    "transformers>=4.45",
+]
+
+[project.urls]
+Homepage = "https://github.com/Mubuky/vllm-literal-tokens"
+Repository = "https://github.com/Mubuky/vllm-literal-tokens"
+Issues = "https://github.com/Mubuky/vllm-literal-tokens/issues"
+
+[project.scripts]
+vllm-literal-tokens = "vllm_literal_tokens.cli:main"
+
+[project.entry-points."vllm.general_plugins"]
+vllm_literal_tokens = "vllm_literal_tokens.qwen_parser:register"
+
+[tool.setuptools.packages.find]
+where = ["src"]
