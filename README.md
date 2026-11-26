@@ -88,7 +88,9 @@ All environment variables are optional:
 | Variable | Default | Description |
 | --- | --- | --- |
 | `VLLM_LITERAL_MODEL` | Auto-detected | Explicit model path or HF repo ID for tokenizer loading. |
+| `VLLM_LITERAL_GENERATION_CONFIG` | Auto-detected | Explicit path to a directory or `generation_config.json` (also read from `--generation-config`). |
 | `VLLM_LITERAL_REASONING_HISTORY` | `preserve` | Set to `last-user` for templates that omit reasoning before the last user turn (e.g. Qwen3.5). |
+| `VLLM_LITERAL_CHAT_TEMPLATE_KWARGS` | `{}` | Optional JSON object of default `chat_template_kwargs` merged under per-request overrides. |
 | `VLLM_LITERAL_REASONING_ALIAS` | `0` | Set to `1` to mirror `message.reasoning` into `message.reasoning_content` on non-streaming responses. |
 | `VLLM_LITERAL_LOCAL_FILES_ONLY` | `0` | Set to `1` to load the tokenizer strictly from local cache. |
 | `VLLM_LITERAL_TRUST_REMOTE_CODE` | `0` | Set to `1` to pass `trust_remote_code=True` when loading the tokenizer. |

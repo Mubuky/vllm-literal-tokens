@@ -43,11 +43,12 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def _model_from_argv(argv: list[str] | None = None) -> tuple[str | None, str | None]:
-    """Extract (--model / positional serve model, --tokenizer) from vLLM CLI argv."""
+def _cli_args_from_argv(argv: list[str] | None = None) -> tuple[str | None, str | None, str | None]:
+    """Extract (--model / serve positional model, --tokenizer, --generation-config) from argv."""
     args = list(sys.argv[1:] if argv is None else argv)
     model: str | None = None
     tokenizer: str | None = None
+    generation_config: str | None = None
 
     i = 0
     while i < len(args):
@@ -58,6 +59,14 @@ def _model_from_argv(argv: list[str] | None = None) -> tuple[str | None, str | N
             continue
         if arg.startswith("--tokenizer="):
             tokenizer = arg.split("=", 1)[1]
+            i += 1
+            continue
+        if arg == "--generation-config" and i + 1 < len(args):
+            generation_config = args[i + 1]
+            i += 2
+            continue
+        if arg.startswith("--generation-config="):
+            generation_config = arg.split("=", 1)[1]
             i += 1
             continue
         if arg in ("--model", "-m") and i + 1 < len(args):
@@ -73,13 +82,29 @@ def _model_from_argv(argv: list[str] | None = None) -> tuple[str | None, str | N
             i += 2
             continue
         i += 1
+    return model, tokenizer, generation_config
+
+
+def _model_from_argv(argv: list[str] | None = None) -> tuple[str | None, str | None]:
+    model, tokenizer, _ = _cli_args_from_argv(argv)
     return model, tokenizer
 
 
-def _load_generation_config(model_ref: str | None, *, local_files_only: bool = False) -> dict[str, Any]:
-    if not model_ref:
+def _env_json_dict(name: str) -> dict[str, Any]:
+    raw = os.environ.get(name)
+    if not raw or not raw.strip():
         return {}
-    local_path = Path(model_ref) / "generation_config.json"
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        raise EncodingError(f"{name} must decode to a JSON object")
+    return parsed
+
+
+def _load_generation_config(model_ref: str | None, *, local_files_only: bool = False) -> dict[str, Any]:
+    if not model_ref or model_ref in ("auto", "vllm"):
+        return {}
+    ref_path = Path(model_ref)
+    local_path = ref_path if ref_path.is_file() else ref_path / "generation_config.json"
     if local_path.is_file():
         try:
             return json.loads(local_path.read_text(encoding="utf-8"))
@@ -202,9 +227,11 @@ class LiteralChatMiddleware:
         generation_config: dict[str, Any] | None = None,
         max_model_len: int | None = None,
         reasoning_content_alias: bool | None = None,
+        default_chat_template_kwargs: dict[str, Any] | None = None,
     ) -> None:
         self.app = app
         self._explicit_model = model or os.environ.get("VLLM_LITERAL_MODEL")
+        self._explicit_generation_config = os.environ.get("VLLM_LITERAL_GENERATION_CONFIG")
         self._reasoning_history = reasoning_history or os.environ.get(
             "VLLM_LITERAL_REASONING_HISTORY", "preserve"
         )
@@ -214,6 +241,11 @@ class LiteralChatMiddleware:
             _env_flag("VLLM_LITERAL_REASONING_ALIAS", False)
             if reasoning_content_alias is None
             else reasoning_content_alias
+        )
+        self._default_template_kwargs: dict[str, Any] = (
+            _env_json_dict("VLLM_LITERAL_CHAT_TEMPLATE_KWARGS")
+            if default_chat_template_kwargs is None
+            else dict(default_chat_template_kwargs)
         )
         self._max_model_len = max_model_len
         self._lock = threading.Lock()
@@ -227,6 +259,14 @@ class LiteralChatMiddleware:
         elif self._explicit_model:
             self._init_from_model_ref(self._explicit_model)
 
+    def _resolve_generation_config(self, fallback_model: str | None) -> dict[str, Any]:
+        _, _, cli_gen = _cli_args_from_argv()
+        for candidate in (self._explicit_generation_config, cli_gen, fallback_model):
+            loaded = _load_generation_config(candidate, local_files_only=self._local_files_only)
+            if loaded:
+                return loaded
+        return {}
+
     def _init_from_model_ref(self, model_ref: str) -> None:
         from transformers import AutoTokenizer
 
@@ -237,9 +277,7 @@ class LiteralChatMiddleware:
         )
         self.protocol = LiteralTokenizer(tokenizer, reasoning_history=self._reasoning_history)
         if not self.generation_config:
-            self.generation_config = _load_generation_config(
-                model_ref, local_files_only=self._local_files_only
-            )
+            self.generation_config = self._resolve_generation_config(model_ref)
 
     def _ensure_initialized(self, scope: dict[str, Any]) -> LiteralTokenizer:
         if self.protocol is not None:
@@ -255,13 +293,11 @@ class LiteralChatMiddleware:
 
             if tok is not None and hasattr(tok, "backend_tokenizer"):
                 self.protocol = LiteralTokenizer(tok, reasoning_history=self._reasoning_history)
-                if not self.generation_config and app_model:
-                    self.generation_config = _load_generation_config(
-                        app_model, local_files_only=self._local_files_only
-                    )
+                if not self.generation_config:
+                    self.generation_config = self._resolve_generation_config(app_model)
                 return self.protocol
 
-            cli_model, cli_tokenizer = _model_from_argv()
+            cli_model, cli_tokenizer, _ = _cli_args_from_argv()
             model_ref = self._explicit_model or cli_tokenizer or app_model or cli_model
             if not model_ref:
                 raise EncodingError(
@@ -290,7 +326,10 @@ class LiteralChatMiddleware:
 
         # Use vLLM's native ChatCompletionRequest validation when available.
         messages_src: list[dict[str, Any]]
-        chat_template_kwargs: dict[str, Any] = dict(original.get("chat_template_kwargs") or {})
+        chat_template_kwargs: dict[str, Any] = {
+            **self._default_template_kwargs,
+            **(original.get("chat_template_kwargs") or {}),
+        }
         tool_choice = original.get("tool_choice")
         model_name = original.get("model", "")
         kv_params = dict(original.get("kv_transfer_params") or {})
@@ -305,7 +344,10 @@ class LiteralChatMiddleware:
             if validated.kv_transfer_params:
                 kv_params = dict(validated.kv_transfer_params)
             if validated.chat_template_kwargs:
-                chat_template_kwargs = dict(validated.chat_template_kwargs)
+                chat_template_kwargs = {
+                    **self._default_template_kwargs,
+                    **dict(validated.chat_template_kwargs),
+                }
         except ImportError:
             raw_messages = original.get("messages")
             if not isinstance(raw_messages, list):

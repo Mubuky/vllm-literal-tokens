@@ -212,14 +212,35 @@ class MiddlewareTest(unittest.TestCase):
         self.assertEqual(sent[1]["body"], b"ok")
 
     def test_argv_model_and_tokenizer_parsing(self):
+        from vllm_literal_tokens.middleware import _cli_args_from_argv
+
         self.assertEqual(
             _model_from_argv(["serve", "Qwen/Qwen3-32B", "--port", "8000"]),
             ("Qwen/Qwen3-32B", None),
         )
         self.assertEqual(
-            _model_from_argv(["--model", "/models/qwen", "--tokenizer=/models/tok"]),
-            ("/models/qwen", "/models/tok"),
+            _cli_args_from_argv(
+                ["--model", "/models/qwen", "--tokenizer=/models/tok", "--generation-config", "/models/gen"]
+            ),
+            ("/models/qwen", "/models/tok", "/models/gen"),
         )
+
+    def test_default_chat_template_kwargs_merged_under_request_overrides(self):
+        mw = LiteralChatMiddleware(
+            app=None,
+            default_chat_template_kwargs={"enable_thinking": True, "reasoning_effort": "xhigh"},
+        )
+        mw.protocol = make_protocol()
+        wire = mw.prepare_request(
+            {
+                "model": "qwen3",
+                "messages": [{"role": "user", "content": "hi"}],
+                "chat_template_kwargs": {"reasoning_effort": "low"},
+            }
+        )
+        self.assertEqual(wire["chat_template_kwargs"]["enable_thinking"], True)
+        self.assertEqual(wire["chat_template_kwargs"]["reasoning_effort"], "low")
+        self.assertEqual(wire["chat_template_kwargs"]["preserve_thinking"], True)
 
     def test_cli_outputs_plugin_path_and_flags(self):
         buf = io.StringIO()
